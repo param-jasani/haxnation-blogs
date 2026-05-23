@@ -1,0 +1,13 @@
+# Ensure consistent LF line endings across all platforms
+* text=auto eol=lf
+
+# Force binary for image/font files
+*.svg binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

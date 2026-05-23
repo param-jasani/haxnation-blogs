@@ -1,0 +1,17 @@
+# Haxnation Blog — Authorized Writers
+# ════════════════════════════════════════
+# This file controls who can submit blog posts.
+# One GitHub username per line (case-insensitive).
+# Lines starting with # are comments.
+#
+# IMPORTANT: Only Haxnation admins should edit this file.
+# Changes to this file require a PR approved by an admin.
+#
+# ════════════════════════════════════════
+
+# ── Admins ──────────────────────────
+haxnation
+
+# ── Blog Writers ─────────────────────
+# Add authorized contributor usernames below, one per line:
+A-Y-U-S-H-Y-A

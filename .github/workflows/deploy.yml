@@ -1,0 +1,94 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# deploy.yml — Haxnation Blog: Build & Deploy to GitHub Pages
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# PURPOSE:
+#   Triggered ONLY on pushes to `main` (which happen exclusively via merged PRs
+#   due to branch protection rules). Builds the Docusaurus site and deploys the
+#   static output to GitHub Pages.
+#
+# PREREQUISITES (one-time setup):
+#   1. Go to repo Settings → Pages
+#      - Source: "GitHub Actions" (not "Deploy from a branch")
+#   2. Ensure the repository has Pages enabled.
+#   3. No additional secrets required — uses GITHUB_TOKEN with Pages permissions.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: 🚀 Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+  # Allow manual trigger from the Actions tab (useful for first deploy)
+  workflow_dispatch:
+
+# Strict, minimal permissions
+permissions:
+  contents: read
+  pages:    write       # Required to deploy to GitHub Pages
+  id-token: write       # Required for OIDC token (trusted Pages deployment)
+
+# Allow only one concurrent deployment; don't cancel in-progress runs
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build Docusaurus Site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for accurate git log dates in posts
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🏗️ Build Docusaurus site
+        run: npm run build
+        env:
+          # Treat broken links as errors in CI
+          CI: true
+          # Uncomment to suppress warnings if needed during initial setup:
+          # NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: 🗜️ Upload build artifact for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Docusaurus outputs to ./build by default
+          path: ./build
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 🌐 Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: ✅ Deployment complete
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  ✅  Haxnation Blog deployed!"
+          echo "  🌐  URL: ${{ steps.deployment.outputs.page_url }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

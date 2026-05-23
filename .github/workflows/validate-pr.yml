@@ -1,0 +1,325 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# validate-pr.yml — Haxnation Blog: PR Author & Content Isolation Validator
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# PURPOSE:
+#   Runs on every PR targeting main. Performs two security checks:
+#     1. Author Authorization  — Is the PR author in the allowed-writers list?
+#     2. Content Isolation     — Are ALL changed files under blog/<author>/ only?
+#
+# TRIAL MODE (haxnation repo):
+#   Uses blog-writers.txt in the repo root as the allow-list.
+#   Set USE_ORG_TEAMS: 'true' and configure ORG_NAME / TEAM_SLUG to switch to
+#   GitHub Org Team membership checks (production / Haxnation org mode).
+#
+# REQUIRED SECRETS:
+#   - BLOG_BOT_TOKEN : A GitHub PAT with 'read:org' scope (for team membership
+#                      checks) and 'repo' scope (to post PR comments).
+#                      In trial mode with USE_ORG_TEAMS=false, only 'repo' scope
+#                      is required for the comment step.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: 🔐 Validate PR — Author & Content Check
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened ]
+
+# Limit permissions to only what is strictly needed
+permissions:
+  contents: read
+  pull-requests: write  # Required to post PR comments
+
+env:
+  # ── Toggle between trial (file-based) and production (org teams) mode ──
+  USE_ORG_TEAMS: 'false'          # Set to 'true' for Haxnation org
+  ORG_NAME:      'Haxnation'      # GitHub organisation name (production)
+  TEAM_SLUG:     'blog-writers'   # Team slug within the org (production)
+  WRITERS_FILE:  'blog-writers.txt' # File-based allow-list (trial mode)
+  BLOG_DIR:      'blog'           # Root directory for all blog posts
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  validate:
+    name: Validate PR Author & Content
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    outputs:
+      author:         ${{ steps.meta.outputs.author }}
+      auth_passed:    ${{ steps.check_auth.outputs.passed }}
+      content_passed: ${{ steps.check_content.outputs.passed }}
+
+    steps:
+      # ── 1. Checkout (needed to read blog-writers.txt in trial mode) ──────────
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # We only need the files list, sparse checkout is fine
+          fetch-depth: 1
+
+      # ── 2. Collect PR metadata ───────────────────────────────────────────────
+      - name: 📋 Collect PR metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.BLOG_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          echo "author=${PR_AUTHOR}" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  PR Author : ${PR_AUTHOR}"
+          echo "  PR Number : #${PR_NUMBER}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      # ── 3. VALIDATION 1: Author Authorization ────────────────────────────────
+      - name: 🔑 Check author authorization
+        id: check_auth
+        env:
+          PR_AUTHOR:   ${{ steps.meta.outputs.author }}
+          GH_TOKEN:    ${{ secrets.BLOG_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::Author Authorization Check"
+          AUTH_PASSED="false"
+          FAILURE_REASON=""
+
+          if [ "${USE_ORG_TEAMS}" = "true" ]; then
+            # ── Production Mode: GitHub Org Team membership check ──
+            echo "Mode: Org Teams (${ORG_NAME}/${TEAM_SLUG})"
+
+            HTTP_STATUS=$(curl -s -o /tmp/team_response.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/orgs/${ORG_NAME}/teams/${TEAM_SLUG}/memberships/${PR_AUTHOR}")
+
+            echo "GitHub API response (HTTP ${HTTP_STATUS}):"
+            cat /tmp/team_response.json | python3 -m json.tool 2>/dev/null || cat /tmp/team_response.json
+
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              MEMBER_STATE=$(python3 -c "import json,sys; d=json.load(open('/tmp/team_response.json')); print(d.get('state',''))")
+              if [ "${MEMBER_STATE}" = "active" ]; then
+                AUTH_PASSED="true"
+                echo "✅ ${PR_AUTHOR} is an active member of @${ORG_NAME}/${TEAM_SLUG}"
+              else
+                FAILURE_REASON="User \`${PR_AUTHOR}\` is in the team but their membership state is \`${MEMBER_STATE}\` (not \`active\`)."
+              fi
+            elif [ "${HTTP_STATUS}" = "404" ]; then
+              FAILURE_REASON="User \`${PR_AUTHOR}\` is **not a member** of the @${ORG_NAME}/${TEAM_SLUG} team."
+            else
+              FAILURE_REASON="GitHub API returned unexpected status \`${HTTP_STATUS}\`. Check the \`BLOG_BOT_TOKEN\` secret."
+            fi
+
+          else
+            # ── Trial Mode: File-based allow-list ──
+            echo "Mode: File-based (${WRITERS_FILE})"
+
+            if [ ! -f "${WRITERS_FILE}" ]; then
+              FAILURE_REASON="\`${WRITERS_FILE}\` not found in repository root. Please create it."
+            else
+              # Trim whitespace and ignore comment lines
+              ALLOWED_USERS=$(grep -vE '^\s*#' "${WRITERS_FILE}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+              PR_AUTHOR_LOWER=$(echo "${PR_AUTHOR}" | tr '[:upper:]' '[:lower:]')
+
+              echo "Allowed users: ${ALLOWED_USERS}"
+              echo "Checking: ${PR_AUTHOR_LOWER}"
+
+              if echo "${ALLOWED_USERS}" | grep -qw "${PR_AUTHOR_LOWER}"; then
+                AUTH_PASSED="true"
+                echo "✅ ${PR_AUTHOR} found in ${WRITERS_FILE}"
+              else
+                FAILURE_REASON="User \`${PR_AUTHOR}\` is **not listed** in \`${WRITERS_FILE}\`. An admin must add them to be authorized."
+              fi
+            fi
+          fi
+
+          echo "::endgroup::"
+          echo "passed=${AUTH_PASSED}" >> "$GITHUB_OUTPUT"
+          if [ "${AUTH_PASSED}" = "false" ]; then
+            echo "auth_failure_reason=${FAILURE_REASON}" >> "$GITHUB_OUTPUT"
+            echo "::error::Authorization FAILED — ${FAILURE_REASON}"
+          fi
+
+      # ── 4. VALIDATION 2: Content Isolation ──────────────────────────────────
+      - name: 📂 Check content isolation (file path enforcement)
+        id: check_content
+        # Run even if auth failed (so we can report both failures in the comment)
+        if: always()
+        env:
+          PR_AUTHOR: ${{ steps.meta.outputs.author }}
+          GH_TOKEN:  ${{ secrets.BLOG_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO:      ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "::group::Content Isolation Check"
+          CONTENT_PASSED="true"
+          VIOLATION_FILES=""
+          ALLOWED_PREFIX="${BLOG_DIR}/${PR_AUTHOR}/"
+
+          echo "Allowed path prefix: ${ALLOWED_PREFIX}"
+
+          # Fetch all changed files in this PR via GitHub API
+          PAGE=1
+          ALL_FILES=""
+          while true; do
+            RESPONSE=$(curl -s \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100&page=${PAGE}")
+
+            # Extract filenames
+            FILES=$(echo "${RESPONSE}" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          if not isinstance(data, list) or len(data) == 0:
+              sys.exit(0)
+          for f in data:
+              print(f['filename'])
+          ")
+            if [ -z "${FILES}" ]; then
+              break
+            fi
+            ALL_FILES="${ALL_FILES}${FILES}"$'\n'
+            PAGE=$((PAGE + 1))
+          done
+
+          echo "Changed files:"
+          echo "${ALL_FILES}"
+
+          if [ -z "$(echo "${ALL_FILES}" | tr -d '[:space:]')" ]; then
+            echo "::warning::No changed files detected. This PR appears empty."
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "content_failure_reason=No changed files detected in this PR." >> "$GITHUB_OUTPUT"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Check each file
+          while IFS= read -r FILE; do
+            FILE=$(echo "${FILE}" | tr -d '[:space:]')
+            [ -z "${FILE}" ] && continue
+
+            if [[ "${FILE}" != ${ALLOWED_PREFIX}* ]]; then
+              CONTENT_PASSED="false"
+              VIOLATION_FILES="${VIOLATION_FILES}\n  ❌ \`${FILE}\`"
+              echo "::error::VIOLATION — File outside allowed path: ${FILE}"
+            else
+              echo "  ✅ OK: ${FILE}"
+            fi
+          done <<< "${ALL_FILES}"
+
+          echo "::endgroup::"
+          echo "passed=${CONTENT_PASSED}" >> "$GITHUB_OUTPUT"
+
+          if [ "${CONTENT_PASSED}" = "false" ]; then
+            # Escape newlines for GITHUB_OUTPUT multiline value
+            REASON="Files were modified **outside** of \`${ALLOWED_PREFIX}\`:"$'\n'"${VIOLATION_FILES}"
+            # Use heredoc for multiline output
+            {
+              echo 'content_failure_reason<<EOF'
+              echo "Files were modified **outside** of \`${ALLOWED_PREFIX}\`:"
+              echo -e "${VIOLATION_FILES}"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 5. Post a friendly comment on the PR ────────────────────────────────
+      - name: 💬 Post PR status comment
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          AUTH_PASSED:           ${{ steps.check_auth.outputs.passed }}
+          CONTENT_PASSED:        ${{ steps.check_content.outputs.passed }}
+          AUTH_FAILURE:          ${{ steps.check_auth.outputs.auth_failure_reason }}
+          CONTENT_FAILURE:       ${{ steps.check_content.outputs.content_failure_reason }}
+          PR_AUTHOR:             ${{ steps.meta.outputs.author }}
+          ALLOWED_PREFIX:        ${{ env.BLOG_DIR }}/${{ steps.meta.outputs.author }}/
+        with:
+          github-token: ${{ secrets.BLOG_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const authPassed    = process.env.AUTH_PASSED    === 'true';
+            const contentPassed = process.env.CONTENT_PASSED === 'true';
+            const author        = process.env.PR_AUTHOR;
+            const allPassed     = authPassed && contentPassed;
+
+            const statusIcon  = allPassed ? '✅' : '❌';
+            const statusTitle = allPassed
+              ? 'All checks passed — ready for review!'
+              : 'Automated checks FAILED';
+
+            let body = `## ${statusIcon} Haxnation Blog — PR Validation\n\n`;
+            body += `> _Automated check run for @${author}_\n\n`;
+            body += `| Check | Status |\n|---|---|\n`;
+            body += `| 🔑 Author Authorization | ${authPassed ? '✅ Authorized' : '❌ Failed'} |\n`;
+            body += `| 📂 Content Isolation    | ${contentPassed ? '✅ Passed' : '❌ Violations found'} |\n\n`;
+
+            if (!authPassed) {
+              body += `### 🔑 Authorization Failure\n${process.env.AUTH_FAILURE}\n\n`;
+              body += `> **To get authorized**: Contact a Haxnation admin to add your GitHub username to the blog-writers list.\n\n`;
+            }
+
+            if (!contentPassed) {
+              body += `### 📂 Content Isolation Violation\n${process.env.CONTENT_FAILURE}\n\n`;
+              body += `> **Rule**: All files in your PR must live under \`${process.env.ALLOWED_PREFIX}\`.\n`;
+              body += `> You may not modify other authors' posts, site configuration, or workflow files.\n\n`;
+            }
+
+            if (allPassed) {
+              body += `🎉 Both automated checks passed! Your PR is now awaiting review from the **Haxnation blog-reviewers** team.\n\n`;
+              body += `> _A reviewer will check your post for quality and guidelines before merging._\n`;
+            }
+
+            body += `\n---\n_🤖 Haxnation Blog Bot · [Contributing Guide](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/CONTRIBUTING.md)_`;
+
+            // Find and update existing bot comment, or create new one
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.data.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Haxnation Blog — PR Validation')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # ── 6. Fail the workflow if any check failed ─────────────────────────────
+      - name: 🚦 Final gate — fail if any check failed
+        if: always()
+        env:
+          AUTH_PASSED:    ${{ steps.check_auth.outputs.passed }}
+          CONTENT_PASSED: ${{ steps.check_content.outputs.passed }}
+        run: |
+          FAILED=false
+          [ "${AUTH_PASSED}"    != "true" ] && echo "::error::Author authorization FAILED." && FAILED=true
+          [ "${CONTENT_PASSED}" != "true" ] && echo "::error::Content isolation check FAILED." && FAILED=true
+          if [ "${FAILED}" = "true" ]; then
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  ❌  PR BLOCKED — See details above."
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            exit 1
+          fi
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  ✅  All checks passed!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

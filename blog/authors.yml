@@ -1,0 +1,19 @@
+haxnation:
+  name: Haxnation
+  title: Haxnation Admin
+  url: https://github.com/haxnation
+  image_url: https://github.com/haxnation.png
+  socials:
+    github: haxnation
+
+# ── Template for new authors ──────────────────────────────────────
+# Copy the block below, replacing the key with their GitHub username.
+#
+# their-github-username:
+#   name: Their Display Name
+#   title: Their Role / Specialty
+#   url: https://github.com/their-username
+#   image_url: https://github.com/their-username.png
+#   socials:
+#     github: their-username
+#     twitter: their-twitter  # optional
