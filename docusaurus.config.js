@@ -43,8 +43,11 @@ const config = {
       'classic',
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
-        // ── Docs DISABLED — blog-only setup ──
-        docs: false,
+        // ── Docs enabled minimally for search plugin compatibility ──
+        docs: {
+          path: 'docs',
+          routeBasePath: 'docs',
+        },
 
         // ── Blog configuration ────────────────────────────────────
         blog: {
@@ -75,6 +78,9 @@ const config = {
           postsPerPage: 10,
           blogSidebarTitle: 'Recent Posts',
           blogSidebarCount: 10,
+
+          // ── Author pages (built-in since Docusaurus 3.1) ──────────
+          authorsMapPath: 'authors.yml',
         },
 
         theme: {
@@ -92,6 +98,26 @@ const config = {
     ],
   ],
 
+  // ── Themes (local search) ─────────────────────────────────────────
+  themes: [
+    [
+      '@easyops-cn/docusaurus-search-local',
+      /** @type {import("@easyops-cn/docusaurus-search-local").PluginOptions} */
+      ({
+        hashed: true,
+        indexBlog: true,
+        indexDocs: false,
+        docsRouteBasePath: [],
+        blogRouteBasePath: '/',
+        language: 'en',
+        searchResultLimits: 8,
+        searchResultContextMaxLength: 50,
+        explicitSearchResultPath: true,
+      }),
+    ],
+  ],
+
+
   // ── Theme configuration ───────────────────────────────────────────
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
@@ -100,7 +126,7 @@ const config = {
       colorMode: {
         defaultMode: 'light',
         disableSwitch: false,
-        respectPrefersColorScheme: true,
+        respectPrefersColorScheme: false,
       },
 
       // ── Announcement bar ──────────────────────────────────────
@@ -119,13 +145,15 @@ const config = {
         logo: {
           alt: 'Haxnation Logo',
           src: 'img/logo.png',
+          srcDark: 'img/logo_dark.png',
           style: { height: '32px', width: 'auto' },
         },
         hideOnScroll: false,
         items: [
-          { to: '/', label: 'Blog', position: 'left' },
+          { to: '/', label: 'Blog', position: 'left', exact: true },
           { to: '/tags', label: 'Tags', position: 'left' },
           { to: '/archive', label: 'Archive', position: 'left' },
+          { to: '/authors', label: 'Authors', position: 'left' },
           {
             href: 'https://Haxnation.org',
             label: 'Main Site',
@@ -134,6 +162,10 @@ const config = {
           {
             href: 'https://github.com/haxnation/blog',
             label: 'GitHub',
+            position: 'right',
+          },
+          {
+            type: 'search',
             position: 'right',
           },
         ],
@@ -156,7 +188,6 @@ const config = {
             items: [
               { label: 'Haxnation.org', href: 'https://Haxnation.org' },
               { label: 'GitHub', href: 'https://github.com/haxnation/blog' },
-              { label: 'Discord', href: 'https://discord.gg/Haxnation' },
             ],
           },
           {
