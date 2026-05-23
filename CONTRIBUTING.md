@@ -97,12 +97,17 @@ More content below the fold...
 
 ### 6. Add Images (Optional)
 
-Place images in `static/img/blog/<your-username>/` and reference them as:
+Because our automated checks restrict you to only modifying files inside `blog/<your-github-username>/`, you **must co-locate** any images directly next to your markdown file.
+
+Place your images in your designated folder:
+`blog/<your-github-username>/my-image.png`
+
+Then reference them in your markdown file using a **relative path**:
 ```markdown
-![Alt text](/img/blog/your-username/image.png)
+![Alt text](./my-image.png)
 ```
 
-> ⚠️ Images must also be inside your namespaced folder.
+> ⚠️ **IMPORTANT**: Do not place images in the `static/` directory. Doing so will cause the automated PR checks to reject your submission for violating Content Isolation.
 
 ### 7. Submit a Pull Request
 
