@@ -22,11 +22,13 @@ const config = {
   trailingSlash: false,
 
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
 
   // Docusaurus 3.10+ — moved from top-level onBrokenMarkdownLinks
   markdown: {
     format: 'md',
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
   },
 
   // ── Internationalisation ─────────────────────────────────────────
@@ -96,7 +98,7 @@ const config = {
     ({
       // ── Color mode (dark/light toggle) ────────────────────────
       colorMode: {
-        defaultMode: 'dark',
+        defaultMode: 'light',
         disableSwitch: false,
         respectPrefersColorScheme: true,
       },
@@ -105,19 +107,19 @@ const config = {
       announcementBar: {
         id: 'welcome',
         content:
-          '🚀 Welcome to the <strong>Haxnation Blog</strong> — Want to contribute? <a href="https://github.com/haxnation/blog/blob/main/CONTRIBUTING.md" target="_blank">Read the guidelines</a>',
-        backgroundColor: 'var(--hax-accent)',
-        textColor: '#fff',
+          '// HAXNATION.BLOG — Community-driven cybersecurity &amp; dev content. <a href="https://github.com/haxnation/blog/blob/main/CONTRIBUTING.md" target="_blank">[ CONTRIBUTE ]</a>',
+        backgroundColor: '#0b0b0b',
+        textColor: '#5ce1e6',
         isCloseable: true,
       },
 
       // ── Navbar ────────────────────────────────────────────────
       navbar: {
-        title: 'Haxnation',
+        title: '',
         logo: {
           alt: 'Haxnation Logo',
-          src: 'img/logo.svg',
-          srcDark: 'img/logo-dark.svg',
+          src: 'img/logo.png',
+          style: { height: '32px', width: 'auto' },
         },
         hideOnScroll: false,
         items: [
@@ -133,12 +135,6 @@ const config = {
             href: 'https://github.com/haxnation/blog',
             label: 'GitHub',
             position: 'right',
-            className: 'navbar-github-link',
-          },
-          {
-            type: 'html',
-            position: 'right',
-            value: `<a class="navbar__cta-btn" href="https://github.com/haxnation/blog/blob/main/CONTRIBUTING.md" target="_blank">✍️ Write a Post</a>`,
           },
         ],
       },
