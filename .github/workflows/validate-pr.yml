@@ -121,7 +121,9 @@ jobs:
               FAILURE_REASON="\`${WRITERS_FILE}\` not found in repository root. Please create it."
             else
               # Trim whitespace and ignore comment lines
-              ALLOWED_USERS=$(grep -vE '^\s*#' "${WRITERS_FILE}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+              
+              ALLOWED_USERS=$(grep -vE '^\s*#' "${WRITERS_FILE}" | tr '[:upper:]' '[:lower:]' | tr -d ' \r\t')
+              
               PR_AUTHOR_LOWER=$(echo "${PR_AUTHOR}" | tr '[:upper:]' '[:lower:]')
 
               echo "Allowed users: ${ALLOWED_USERS}"
