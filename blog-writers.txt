@@ -15,3 +15,4 @@ haxnation
 # ── Blog Writers ─────────────────────
 # Add authorized contributor usernames below, one per line:
 A-Y-U-S-H-Y-A
+param-jasani
