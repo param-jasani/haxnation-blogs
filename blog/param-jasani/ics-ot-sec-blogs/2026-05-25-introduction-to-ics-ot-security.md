@@ -11,7 +11,7 @@ tags:
   - industrial-security
   - critical-infrastructure
 
-date: 2026-05-23T12:00:00.000Z
+date: 2026-05-25T08:00:00.000Z
 
 description: >
   An introduction to Industrial Control Systems (ICS) and Operational
