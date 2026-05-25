@@ -6,6 +6,13 @@ haxnation:
   socials:
     github: haxnation
 
+param-jasani:
+  name: Param Jasani
+  title: Stoic after learning about CyberSec
+  url: https://github.com/param-jasani
+  image_url: https://github.com/param-jasani.png
+  socials:
+    github: param-jasani  
 # ── Template for new authors ──────────────────────────────────────
 # Copy the block below, replacing the key with their GitHub username.
 #
