@@ -7,6 +7,10 @@ tags:
   - auth
   - RADIUS
   - kerberos
+  - CVE-2026-24516
+  - dotty
+  - RCE
+  - HTB-Mumbai-Meetup-Summary
 
 date: 2026-05-31T04:00:00.000Z
 
