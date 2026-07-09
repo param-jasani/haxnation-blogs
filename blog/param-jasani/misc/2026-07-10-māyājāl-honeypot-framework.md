@@ -72,22 +72,18 @@ The [HoneyGPT](https://arxiv.org/abs/2406.01882) paper formalized a structural c
 | **Interaction Depth** | Survival under interactive tools and long-running sessions |
 | **Deception Quality** | Presence of believable user artifacts (browser history, SSH keys, corporate documents) and consistent system state |
 
-No pre-LLM system could achieve more than two simultaneously:
-
-- **Real OS honeypots** offered interaction depth and deception - but zero flexibility (one physical or virtual host per instance).
-- **Scripted medium-interaction honeypots** (like Cowrie) offered flexibility and modest deception — but collapsed under real interaction (`vim`, `strace`, `/proc` checks).
-
+No pre-LLM system could achieve more than two simultaneously.
 ---
 
 ## How Previous LLM Honeypots Tried (and Failed)
 
 ### First Generation: Commercial LLMs (2023–2024)
 
-Projects like [HoneyGPT](https://arxiv.org/abs/2406.01882), LLMHoney, and [SSHoney](https://arxiv.org/abs/2409.08234) demonstrated that a commercial LLM (GPT-4, Claude 3, Gemini 1.5) could generate plausible terminal responses. Median dwell time jumped from seconds to 8–15 minutes — a genuine improvement.
+Projects like [HoneyGPT](https://arxiv.org/abs/2406.01882), LLMHoney, and [SSHoney](https://arxiv.org/abs/2409.08234) demonstrated that a commercial LLM (GPT-4, Claude 3, Gemini 1.5) could generate plausible terminal responses. Median dwell time increased drastically (I assume, because I don't remember what they stated in the paper, its being a while I have read them).
 
 But they suffered from fatal limitations:
 
-- **Hallucinated filesystem and process state** — No real `/home`, `/proc`, or persistent files. The LLM made up directory listings that contradicted themselves across commands.
+- **Hallucinated filesystem and process state** — No real directories or persistent files. The LLM made up directory listings that contradicted themselves across commands.
 - **Single-instance Python architecture** — Vulnerable to memory leaks, crashes under interactive tools, and container escape.
 - **Zero horizontal scaling** — Each new IP or persona required a separate process and hand-crafted prompt.
 
@@ -121,272 +117,183 @@ And critically, a **second agent** (the TTP Analyst) continuously transforms raw
 
 ---
 
-## System Architecture
+## The Architecture: How the Illusion is Built
 
-Māyājāl is designed as a high-interaction deception framework where honeypots are not isolated artifacts but an **autonomous, self-scaling ecosystem**. All components are containerized using Docker Compose.
+To pull off a realistic corporate network illusion without draining our wallets on API costs or making the attacker wait 10 seconds for a response, we designed a hybrid architecture. It combines a fast, memory-safe **Rust orchestrator** on the host, a warm pool of **ephemeral containers**, and a **Persona Factory** powered by LLMs to pre-generate the assets.
 
-At the center is a Rust-based SSH/Telnet honeypot that intermediates all attacker interactions. This core communicates with three specialized LLMs and a unified data store powered by SQLite, while a defender dashboard exposes configuration, persona generation, and threat intelligence outputs.
+Here is the high-level breakdown of the host and container layers:
 
-<div class="diagram-container">
-  <figure>
-    <img
-      class="diagram-img"
-      src="https://raw.githubusercontent.com/haxnation/blog/main/blog/param-jasani/misc/imgs/mayajal-architecture.png"
-      alt="Māyājāl System Architecture Diagram"
-    />
-    <figcaption class="diagram-caption">
-      <strong>Fig 1:</strong> End-to-end system architecture of Māyājāl showing the Rust SSH core, three specialized LLMs, SQLite virtual filesystem, SIEM integration, and React defender dashboard.
-    </figcaption>
-  </figure>
-</div>
-
-### The Rust SSH/Telnet Core
-
-The attacker-facing server is implemented in Rust using [russh](https://github.com/warp-tech/russh) for SSH protocol handling and [Tokio](https://tokio.rs/) for asynchronous PTY emulation. Rust was chosen specifically for **memory safety** — it mitigates common exploit vectors like buffer overflows that plague Python, Go, or C-based honeypots.
-
-Upon connection on port 22, the core presents a realistic Ubuntu-like environment: login banners, dynamic MOTD messages, and persona-specific configuration.
-
-### The Three-Tier Command Resolution Pipeline
-
-Command handling follows a **deterministic three-tier resolution pipeline** that balances fidelity and latency:
-
-#### Tier 1 — Native Resolution (Microseconds)
-
-Frequently used, non-filesystem commands (`pwd`, `whoami`, `history`, `uname -a`) are executed entirely inside the Rust core using in-memory state. These complete within microseconds and require no backing store access.
-
-#### Tier 2 — Virtual Filesystem Emulation (Milliseconds)
-
-Filesystem-related operations (`ls -la`, `cat`, `chmod`, `mv`, arbitrary writes) are mapped onto an **SQLite-backed virtual filesystem**. The core performs atomic SQL transactions for path resolution, permission enforcement, timestamp updates, and BLOB retrieval (Chrome cookies, history databases, binary artifacts). ACID semantics prevent state drift during concurrent or piped command sequences.
-
-#### Tier 3 — Delegated Emulation via LLM (Variable)
-
-Complex or unknown commands (`strace`, `apt update | grep error`, `mysql`, interactive tools like `vim`) are forwarded to **LLM-1** (the Deception Engine) along with session metadata: user identity, current working directory, privilege level, and recent command history. The model returns only the terminal output and updated shell prompt — no hallucinated state leaks into the environment.
-
-> This tiered approach means the vast majority of commands resolve in microseconds or milliseconds. The LLM is only invoked when genuine complexity demands it, keeping latency low and realism high.
-
-### Logging and SIEM Integration
-
-All executed commands are transformed into **encrypted JSON records** containing timestamps, source IP, user, CWD, input, truncated output, and an HMAC-SHA256 signature. These records are streamed to SIEM systems via syslog or HTTP forwarders — **no logs are persisted locally on the honeypot**, preventing an attacker from tampering with evidence.
+| Layer | Component | Key Responsibility |
+|---|---|---|
+| **Host Layer** | Master Router & PAM Tarpit | Connection handling, routing, and adding artificial jitter. |
+| | Warm Pool Manager | Pre-spawning blank containers so we have zero cold-start delay. |
+| | Persona Factory | Map-reduce agentic pipeline that generates employee profiles. |
+| | Checkpoint & IR Storage | Storing session snapshots and quarantining real malware payloads. |
+| **Ephemeral Container Layer** | Rust Core (`Tokio` + `russh`) | Fast, lightweight SSH shell handling. |
+| | State Engine (`DashMap` + `MPSC` + `redb`) | Deadlock-free memory and persistent database. |
+| | Tiered Command Processor | Decides whether to run native Rust commands or ask the LLM. |
+| | Payload Trap | Intercepts, downloads, and quarantines malicious scripts. |
 
 ---
 
-## The Deception Engine (LLM-1): Fine-Tuned Terminal Emulation
+## 1. The Persona Factory: Manufacturing Digital Human Lives
 
-The Deception Engine is the backbone of Māyājāl's realism. It's a code-specialized LLM subjected to **continued pre-training using QLoRA and CorDA** on a corpus of:
+My colleague designed this part (remember, the AI genius?). The goal here was to create a realistic corporate environment on demand. If an attacker lands on a container, they shouldn't just see a clean Ubuntu install. They should see git histories, config files, bash history, personal notes, SSH keys, and half-written scripts that match the user's role. 
 
-- Real terminal transcripts
-- Package manager logs
-- Shell error messages
-- Interactive utility sessions (`vim`, `tmux`, `gdb`, `strace`)
-- Privilege escalation chains
+Doing this at runtime with an LLM is way too slow, so we do it ahead of time using a **Map-Reduce agentic pipeline**:
 
-### Why Fine-Tuning Matters
+1. **Pre-Flight Engine**: Takes compulsory inputs (like number of departments and users per department, defaulting to 10) and optional inputs (specific usernames, passwords, hostnames). If nothing is specified, it pulls leaked usernames and passwords from the **RockYou** wordlist. It then generates a unified `corporate_directory.toml`.
+2. **Architect Agent**: Looks at the TOML and plans required custom files for each user based on their role (e.g., an engineer gets SSH config files and Dockerfiles; an HR user gets resumes and PDFs).
+3. **Parallel Micro-Generators**: Spin up LLM calls in parallel to generate the contents of each planned file.
+4. **Validator Agent**: A separate agent checks the generated files for syntax errors and realism, retrying if the LLM hallucinated something unusable.
+5. **Assembler**: Merges all these files with a `base_linux_fs.yml` template to output a comprehensive `[username].yml` filesystem blueprint.
 
-This is what separates Māyājāl from every previous LLM honeypot. Earlier systems used general-purpose models (GPT-4, Llama 3, Mixtral) that were never trained on terminal interaction data. They produced responses that *looked* plausible but were riddled with subtle errors — wrong error codes, impossible file permissions, inconsistent process tables — that experienced attackers spotted instantly.
-
-By applying [QLoRA](https://arxiv.org/abs/2305.14314) (Quantized Low-Rank Adaptation) and [CorDA](https://arxiv.org/abs/2406.05223) (Context-Oriented Decomposition Adaptation) continued pre-training on a curated terminal corpus, the resulting model is designed to:
-
-- Handle interactive tools (`vim`, `tmux`, `gdb`) for extended sessions
-- Produce correct error codes and permission strings
-- Maintain filesystem and process table consistency across long conversations
-- Survive complex multi-step privilege escalation chains
-
-### Structured Prompt Design
-
-The model receives a structured prompt containing:
-
-- Raw command
-- User identity and privilege level
-- Current working directory
-- Truncated history window
-- Relevant filesystem context (optional, for complex commands)
-
-The output is **strictly constrained** to:
-
-1. Terminal output text
-2. ANSI escape sequences (where appropriate)
-3. The correct next shell prompt
-
-Nothing else. No explanations, no commentary, no hallucinated state.
-
----
-
-## The Persona Factory (LLM-2): Autonomous Corporate Ecosystem Generation
-
-> This is the component that breaks the scalability barrier that every previous honeypot system has hit.
-
-A defining limitation of all prior LLM-based honeypots has been the manual effort required to create and deploy realistic victim personas. **Māyājāl eliminates this bottleneck entirely.**
-
-The Persona Factory is a fully autonomous orchestration subsystem that transforms a single natural-language directive from the defender into **hundreds of complete corporate employees**, their digital artifacts, and the live honeypot containers required to expose them.
-
-### How It Works
-
-The defender submits a request through the React-based management dashboard. Something like:
-
-> *"Deploy 180 employees at MediCore Health: 70 Oracle DBAs, 80 software developers, 30 clinical analysts, with realistic behavioral traits and high-value credentials."*
-
-This request triggers a **stateful agentic workflow** implemented using [LangGraph](https://github.com/langchain-ai/langgraph), a production-grade directed acyclic execution engine. A frontier commercial LLM serves as the sole reasoning component, performing all planning, generation, validation, storage, and infrastructure provisioning via structured function calling.
-
-The workflow proceeds through **six specialized nodes**:
-
-### 1. Planner Node
-
-The LLM decomposes the request into role-specific cohorts, selects behavioral traits (e.g., *"overworked junior DBA"*, *"compliance-conscious analyst"*), and produces a structured execution plan specifying cohort sizes, trait distributions, and infrastructure requirements.
-
-### 2. Generator Node
-
-The LLM is invoked in parallel batches (up to 20 concurrent calls) using a rigorously enforced JSON schema. For **each persona**, the model outputs:
-
-- **Identity metadata** — full name, username, title, department
-- **A complete virtual home directory** (25–45 files) containing:
-  - Shell configuration (`.bashrc`, `.profile`)
-  - SSH key pairs (`.ssh/id_rsa`, `authorized_keys`)
-  - **Chrome profiles** — realistic SQLite databases with Cookies, History, and Bookmarks
-  - Role-specific configuration files
-  - Documents containing synthetic PII
-  - <mark>Deliberately planted high-value secrets</mark> — database credentials, cloud access keys, VPN certificates, and sloppy configurations ("frustrated junior DBA who forgets to revoke old privileges")
-
-All files are annotated with correct octal permissions, plausible timestamps, and ownership metadata consistent with the assigned behavioral traits.
-
-### 3. Validator Node
-
-A second LLM invocation performs schema compliance, syntactic correctness (valid SQL syntax, realistic AWS ARN formats), trait fidelity, and deduplication checks. Invalid outputs trigger **automatic reflection and regeneration** until compliance is achieved.
-
-### 4. Storage Node
-
-Validated artifacts are committed **atomically** to the central SQLite state database. Employee profiles populate an `employees` table; filesystem objects (including binary artifacts stored as BLOBs) are inserted into a `files` table with foreign-key relationships. A background service simultaneously materializes the directory trees under a shared volume accessible to all honeypot containers.
-
-### 5. Orchestrator Node
-
-The LLM evaluates current swarm capacity by querying the Docker daemon. If the ratio of active victims to running containers exceeds a configurable threshold (default 50:1), it **autonomously invokes the Docker SDK** to scale the Rust honeypot service:
-
-```bash
-docker compose up --scale rust_honeypot=+N
+The resulting disk structure looks like this:
+```text
+FS/
+├── base_linux_fs.yml
+├── Engineering/
+│   ├── johndoe.yml
+│   └── ... (custom files, ssh keys, workspace configs)
+├── HR/
+│   ├── johndoe.yml (cloned/adapted for shared network accounts)
 ```
 
-New containers are provisioned on new external IPs via integrated cloud provider APIs. They immediately inherit the updated victim population through the shared SQLite volume.
+---
 
-> If the attacker is performing privilege escalation or lateral movement, the Rust server detects it and triggers the Persona Factory to spawn only the specific user's honeypot container on demand — ensuring resources are allocated only when needed.
+## 2. Orchestration: Warm Pools & Department Swarming
 
-### 6. Notifier Node
+If we spawned containers on the fly when an attacker connects, they’d notice the lag (cold start). And timing attacks are a honeypot’s worst enemy. 
 
-Upon completion, the LLM generates a concise execution report and delivers it via WebSocket to the defender, including an updated inventory of deployed victims and newly allocated public IPs.
-
-> **Result:** A single defender command produces a fully operational, multi-IP deception environment in under two minutes. No manual filesystem staging, no hand-crafted prompts, no separate process management.
+To solve this, we built:
+- **PAM Tarpit with Jitter**: When a connection attempt is made, the Master Router holds the connection with a random jitter of 1–3 seconds. This mimics real network latency and buys us time.
+- **Warm Pool Manager**: We maintain a buffer of **15 to 20+ blank container instances** at all times. When the attacker connects, we grab a container from the pool, inject the pre-generated YAML or database snapshot corresponding to the targeted user, and hand over the session instantly.
+- **Department Swarming**: Here’s the fun part. If an attacker compromises a user in the "Engineering" department, we don't just stand up that one container. The orchestrator immediately spawns a full subnet containing *all* other users in the Engineering department. 
+- **Honeytoken Pivoting**: If the attacker notices other hosts in their `/etc/hosts` or ssh configs and tries to ping or SSH into them, we intercept the outbound connection and route it to the newly spawned containers in the swarm. To the attacker, it looks like they are successfully moving laterally across a real network!
 
 ---
 
-## The TTP Analyst (LLM-3): Closed-Loop Threat Intelligence
+## 3. Ephemeral Rust Container Core & Lock-Free State Engine
 
-The TTP Analyst is the final layer — a fully autonomous, tool-augmented agentic system that continuously transforms raw attacker interactions into **structured, production-grade detection engineering artifacts** within seconds.
+Inside the container, we run a custom shell written in Rust using `Tokio` and `russh`. 
 
-### The Tool Suite
+### The State Engine: No Deadlocks, No BS
+Traditional honeypots often suffer from deadlocks or write-amplification when multiple processes write to the simulated disk. We avoided this by splitting reads and writes:
+- **Reads (`DashMap`)**: A highly concurrent, lock-free hash map in Rust that handles fast reads for commands like `cat` or `ls` with zero contention.
+- **Writes (`MPSC Queue` + State Actor)**: Instead of writing directly to the disk state, commands send write requests through a Multi-Producer Single-Consumer queue. A single, dedicated **State Actor** processes these writes sequentially. This guarantees **zero deadlocks** and keeps the state consistent.
+- **`redb`**: A fast, embedded key-value database written in Rust. The State Actor commits changes directly to an internal `redb` database inside the container. We can also option a shared host `redb` for users shared across multiple departments.
 
-The agent is provisioned with a comprehensive, extensible set of tools:
+```
+       Reads                     Writes
+[SSH Client] ---> DashMap <--- [State Actor]
+                    ^                |
+                    |                v
+                    +------------ redb (Internal DB)
+```
 
-| Agent/Tool | Function |
-|---|---|
-| **Log Ingestion Agent** | Continuously monitors encrypted JSON command streams arriving at the SIEM via webhook subscriptions or authenticated polling |
-| **Filesystem Correlation Agent** | Read-only access to the shared SQLite virtual filesystem — retrieves and inspects files written or modified by the attacker |
-| **Static Analysis Agent** | Executes YARA rules and ClamAV signatures against dropped payloads, extracting strings, imports, and section characteristics |
-| **Dynamic Analysis Agent** | Triggers lightweight, containerized sandbox execution for unknown binaries in full isolation |
-| **External Enrichment Agent** | Performs hash-only lookups against VirusTotal and MalwareBazaar; with defender approval, submits anonymized samples for deeper analysis |
-| **ATT&CK Mapping Agent** | Maintains an embedded, versioned MITRE ATT&CK representation and classifies command sequences into techniques with probabilistic confidence scores |
-| **YARA Rule Synthesis Agent** | Generates context-aware YARA rules tailored to observed strings, imports, and behavioral indicators |
-| **Sigma Rule Synthesis Agent** | Crafts Sigma detection logic targeting exact command-line patterns, process ancestry, and file paths from the session |
-| **Reporting & Dissemination Agent** | Structures the final intelligence package, persists it in the database, and pushes real-time notifications via WebSocket to the dashboard |
+### Tiered Command Processing
+Sending every command to an LLM is a bad idea—it’s slow, expensive, and easy to break. We handle commands in three tiers:
+1. **Tier 1 & 2 (Rust Native)**: Basic commands like `cd`, `pwd`, `whoami`, `mkdir`, and simple `ls` are executed instantly by native Rust code.
+2. **Payload Trap**: What happens when they try to download a rootkit? If they execute `wget` or `curl`, we let it run! The container performs a real download, saves the malware to an isolated Forensic IR Volume for analysis, and replaces the file in the attacker's virtual directory with a harmless virtual representation.
+3. **Tier 3 (Deception Engine / LLM)**: For complex, context-heavy commands (like editing a file, running a custom script, or database commands), we extract a JIT (Just-In-Time) micro-YAML of the current CWD (Current Working Directory). We send this context to the LLM, which generates a structured JSON action containing the terminal output and state changes.
 
-### How It Operates
+For interactive utilities like `vim` or `nano`, we hijack the PTY and display native Rust UI overlays, allowing the attacker to type freely without feeling any lag.
 
-The agent runs in a **persistent reasoning loop**:
-
-1. Detects new attacker activity via the SIEM stream
-2. Autonomously determines the optimal tool chain
-3. Orchestrates parallel and sequential tool calls
-4. Performs cross-correlation between log events and filesystem state
-5. Resolves ambiguities through iterative reasoning
-6. Converges on a definitive threat intelligence artifact
-
-The output is a structured intelligence package containing:
-
-- **MITRE ATT&CK timeline** — every observed technique mapped with confidence scores
-- **Incident narrative** — human-readable summary of the attacker's session
-- **YARA rules** — ready to deploy against the specific malware or tools observed
-- **Sigma rules** — detection logic matching the exact command patterns used
-- **Defender-action recommendations** — prioritized response steps
-
-### One-Click Intelligence Sharing
-
-From the React dashboard, defenders can forward dropped binaries, suspicious files, or entire sessions to external threat-intelligence and sandboxing platforms with a single click:
-
-- VirusTotal, MalwareBazaar, Tria.ge, CAPE
-- Cisco Talos Intelligence, Hybrid Analysis
-- Any.Run, Joe Sandbox, Shodan
-
-> **The result:** Every attacker action is immediately converted into deployable defensive content. Māyājāl transforms from a passive observation platform into an **active, self-improving component** of the defender's detection and response capability.
+### Shutdown & Checkpoint Sync
+When the session ends or a timeout occurs, the container catches the `SIGTERM` signal:
+1. It flushes the remaining MPSC queue writes.
+2. The State Actor saves the state to `redb`.
+3. It serializes the final state back to a YAML checkpoint.
+4. It performs a cross-department sync if the user exists on other containers.
+5. It exports raw session logs and quarantined malware to the external SIEM.
 
 ---
 
-## What Makes Māyājāl Different
+## 4. Key Mitigations Applied
 
-To our knowledge, Māyājāl is the first system to combine:
+Here's how we addressed the major security and performance challenges:
 
-| Capability | Māyājāl | Previous Systems |
-|---|---|---|
-| Memory-safe attack surface | ✅ Rust (russh + Tokio) | ❌ Python, Go, or C |
-| Fine-tuned terminal emulation | ✅ Code model + QLoRA/CorDA on terminal data | ❌ Generic LLMs (GPT-4, Llama 3) |
-| Autonomous persona generation | ✅ Agentic LLM creates hundreds of employees on demand | ❌ Manual prompt crafting per instance |
-| Self-scaling infrastructure | ✅ LLM-driven Docker orchestration | ❌ Manual container provisioning |
-| Real-time detection engineering | ✅ Autonomous YARA/Sigma/ATT&CK generation | ❌ Manual log analysis |
-| SQLite virtual filesystem | ✅ ACID-compliant, BLOB-backed, shared across instances | ❌ Hallucinated or static filesystems |
-
-No prior work solves more than two corners of the trilemma simultaneously. Māyājāl addresses all three while adding closed-loop detection engineering.
+- **Deadlocks**: Eliminated by serializing all state writes through the MPSC queue to a single State Actor.
+- **Cold Starts**: Eliminated by maintaining a warm pool of blank containers and using a PAM tarpit with jitter to mask injection times.
+- **Timing Attacks**: Masked by introducing artificial jitter and random network latency (1-3s).
+- **Write Amplification**: Reduced because we only write to the heavy YAML format during checkpoints/shutdown; runtime writes use the lightweight, binary `redb`.
+- **Resource Exhaustion**: Managed via aggressive container CPU/Memory limits and automatic session timeouts.
+- **Prompt Injection**: A Rust-layer input firewall uses `shlex` parsing, allowlisting, and strict keyword blocking before commands ever reach the LLM.
 
 ---
 
-## Known Limitations
+## 5. Architectural & Session Flows
 
-We believe in being transparent about what Māyājāl *can't* do yet:
+To help visualize how everything fits together, here are the diagrams of the system flows:
 
-### Commercial Model Dependency
+### High-Level System Overview
+```mermaid
+graph TD
+    Attacker((Attacker)) --> Router[Master Router / PAM Tarpit]
+    Router --> WarmPool[Warm Pool Manager]
+    WarmPool --> Container[Ephemeral Rust Container]
+    
+    subgraph Host
+        PersonaFactory[Persona Factory]
+        CheckpointStorage[Checkpoint & IR Storage]
+    end
+    
+    PersonaFactory --> Container
+    Container --> CheckpointStorage
+    Container --> SIEM[External SIEM]
+```
 
-The Persona Factory and TTP Analyst currently rely on proprietary frontier models. This introduces reproducibility concerns, potential cost barriers, and non-determinism from provider-side updates and safety filtering. Future iterations will explore fine-tuned open-source alternatives with local inference engines like vLLM or llama.cpp.
+### Container Internal State Engine
+```mermaid
+graph TD
+    SSH[Tokio SSH Task] --> Firewall[Input Firewall]
+    Firewall --> TierCheck{Tier?}
+    
+    TierCheck -->|1/2| Native[Rust Native Logic]
+    TierCheck -->|3| Context[Micro-YAML from DashMap]
+    Context --> LLM[Deception Engine]
+    
+    Native & LLM --> Action{Action?}
+    Action -->|Read| DashMap
+    Action -->|Write| MPSC[MPSC Queue]
+    MPSC --> StateActor[State Actor]
+    StateActor --> DashMap
+    StateActor --> redb[redb]
+```
 
-### Inference Latency for Complex Commands
+### Persona Factory Pipeline
+```mermaid
+graph LR
+    Input[Defender Input + Randomizer] --> TOML[corporate_directory.toml]
+    TOML --> Architect[Architect Agent]
+    Architect --> Generators[Parallel Micro-Generators]
+    Generators --> Validator[Validator + Retry]
+    Validator --> Assembler[Merge + Base Linux]
+    Assembler --> Disk[FS/[Dept]/[User].yml]
+```
 
-While Tier 1 and Tier 2 commands resolve in sub-millisecond times, Tier 3 delegation to the Deception Engine introduces variable latency. Sophisticated attackers using timing-based fingerprinting may detect this delay, particularly on low-load honeypots.
-
-### Cold-Start Realism Gap
-
-Newly provisioned honeypot instances require the Persona Factory to populate the SQLite virtual filesystem before becoming fully convincing. This brief window represents a theoretical detection vector for extremely rapid reconnaissance.
-
-### Network Outbound Simulation
-
-Outbound network connections (reverse shells, C2 callbacks) are emulated locally through LLM-generated outputs and Rust-based response simulation. This preserves operational security by preventing actual network egress, but introduces a detection vector: attackers verifying their C2 server logs will observe the absence of genuine inbound connections. Allowing real outbound access would enhance realism but poses unacceptable risks to hosting infrastructure.
+### Session Lifecycle & Checkpointing
+```mermaid
+graph TD
+    Connection[New Connection] --> Tarpit[PAM Tarpit]
+    Tarpit --> Swarm[Department Swarm]
+    Swarm --> Container[Spawn / Inject]
+    Container --> Session[Active Session]
+    Session --> Shutdown[SIGTERM]
+    Shutdown --> Flush[Flush MPSC + redb]
+    Flush --> Sync[Cross-Department Sync]
+    Sync --> Export[Export to SIEM + Storage]
+```
 
 ---
 
-## Future Work
+## 6. Remaining Risks & Monitoring
 
-Immediate efforts will focus on:
-
-- **Large-scale deployment** across heterogeneous cloud environments to gather longitudinal attacker interaction data
-- **Controlled red-team exercises** with both automated scripts and human operators to validate the tiered command resolution strategy
-- **Open-source model alternatives** for the Persona Factory and TTP Analyst to enhance reproducibility and reduce costs
-- **Hybrid egress models** — proxy-based forwarding to isolated sandbox endpoints, or federated deception networks where honeypots collaboratively emulate realistic traffic patterns
-- **Self-improving feedback loops** — real attacker sessions are automatically harvested and folded back into the continued pre-training corpus, enabling recursive refinement of the Deception Engine with every sophisticated intruder it attracts
-
----
-
-## Conclusion
-
-Māyājāl represents a fundamental departure from the static, manually scaled honeypots that have dominated deception research for two decades. By replacing brittle scripting with a tiered, memory-safe Rust core backed by a single atomic SQLite virtual filesystem, and by delegating behavioral fidelity to three specialized, agentic LLMs, the framework achieves a level of attacker dwell time, environmental consistency, and horizontal scalability that prior systems have never simultaneously attained.
-
-Most importantly, the fully autonomous Persona Factory and Real-Time TTP Analyst close the <mark>deception-to-detection loop</mark> in a manner that is without precedent: **high-level defender intent is translated into live corporate illusions at arbitrary scale, and every adversary action is immediately converted into structured, production-ready detection content without human analysis.**
-
-Māyājāl is not a fixed artifact — it's designed to be a living, self-healing deception ecosystem that improves with every sophisticated intruder it attracts.
-
-> **A reference implementation is under active development. We invite collaboration from the research community to implement and evaluate these extensions.**
+As with any architectural proposal, it's not completely bulletproof. If we were to build the reference implementation today, we'd need to aggressively monitor:
+- **Warm Pool Health**: Ensuring containers are refilled faster than an attacker can scan or brute-force connections.
+- **Tier-3 Latency**: Monitoring how long the LLM takes to return terminal states and falling back to native mock errors if API latency spikes.
+- **Container Terminations**: Alerting on unexpected crashes or attempts at container escapes.
+- **Active Red Teaming**: Regular automated testing of the honeypot using tools like Hydra, Metasploit, and custom post-exploitation scripts to see if the illusion holds up.
 
 ---
 
