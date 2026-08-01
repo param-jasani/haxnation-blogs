@@ -44,9 +44,9 @@ Modern honeypots are hollow, easily fingerprinted and abandoned by attackers wit
 <!-- truncate -->
 ## Intro and some banter
 
-If you opened this blog, I guess that either you are regular reader of blogs that I write on this site or you came through a post that I made on LinkedIn. Now today's blog is something diff8erent, its on a framework that me and couple of my friends worked on but were never able to complete due to some pedestals in our route, and we never tried to overcome them, so I would start with some banter regarding what happened and why finally I decided to publish this paper as a blog.
+If you opened this blog, I guess that either you are regular reader of blogs that I write on this site or you came through a post that I made on LinkedIn. Now today's blog is something different, its on a framework that me and couple of my friends worked on but were never able to complete due to some pedestals in our route, and we never tried to overcome them, so I would start with some banter regarding what happened and why finally I decided to publish this paper as a blog.
 
-Yup! Last year, Me and my friend were trying to work on this framework, but we weren't able to publish this paper and here I am, I would like to publish this as a blog if people don't value the effort... Am I sounding frustrated? Because slightly I am, we tried to present the paper at a very novel conference in our country but were rejected with the comment as "The paper is completely AI Written, its language is not understandable. There is no clarity work." and many more comments, like did they even read the framework or I am just in a delusion that what we made is good and in reality it isn't (because every creator loves his own creation, might be the case that I am blind - referring to the same phenomena)? Just ping me on LinkedIn if you find it interesting, I wanted to work on it, but rejected the idea of bringing it to life, why? because I tried to make it as a semester project and the external that came to review it, by looking at the prototype told us that it was trash and he would fail us if we continued this and said we just wasted our time.
+Yup! Last year, Me and my friend were trying to work on this framework, but we weren't able to publish this paper and here I am, I would like to publish this as a blog as our paper was not accepted by review orgs... Am I sounding frustrated? Because slightly I am, we tried to present the paper at a very novel conference in our country but were rejected with the comment as "The paper is completely AI Written, its language is not understandable. There is no clarity work." and many more comments, like did they even read the framework or I am just in a delusion that what we made is good and in reality it isn't (because every creator loves his own creation, might be the case that I am blind - referring to the same phenomena)? Just ping me on LinkedIn if you find it interesting, I wanted to work on it, but rejected the idea of bringing it to life, why? because I tried to make it as a semester project and the external that came to review it, by looking at the prototype told us that it was trash and he would fail us if we continued this and said we just wasted our time.
 
 At the end, I thought that he(the external faculty that came to review) might not be wrong, we did not do something novel, we just arranged some bits and pieces that were created by some other great people and put them together to create a new framework and gave it a name and were calling it novel, now what brings me here then, if I already had that thought in my mind, I am still unsure that people require this framework or not. So presenting you this novel or cliché or novel or cliché or novel or cliché.... I still don't know, So presenting you this framework...... DRUMS!!
 
@@ -56,7 +56,10 @@ At the end, I thought that he(the external faculty that came to review) might no
 
 ## The Problem
 
-There is no problem as such with exsisting solutions, as I already told you we were planning to write a paper on it so I will keep the section headers as it is, why? because I want to make the fun of FORMAT specified by people who do not know anything about our field and the whole purpose of this framework was to increase attacker dwell time and make the honeypot seem as realistic as possible. And as the FORMAT says that you have to identify some gaps in exisisting solutions so here we go, there are no gaps in them, they all are great on their own, infact we are inspired from them and this framework is trying to improve existing systems(by putting everything together).
+As such there is no problem presented by current solutions, all of them are great on their own, we identified the gaps that were present in each solution and tried to combine bits and pieces from each solution to make a single solution that creates a pain the attacker's butt. 
+
+We wanted to place our honeypot as a medium interactive one, so we thought of making AI/LLM perform the OS simulation rather than using a complete OS which would save our resouces and we will do service level emulation using Rust, 
+after this HLD plan, we started to research on this and we came to know that there are already solutions that solve these pain points and use LLM for OS emulation, so we took inspiration from them and started to identify the gaps in those solutions, so lets start stating them one by one.....
 
 ---
 
@@ -105,15 +108,13 @@ Interaction depth *regressed*, attackers disengaged rapidly, and **scalability r
 
 **Māyājāl** (from Sanskrit, meaning *web of illusion*) is a terminal honeypot framework that simultaneously addresses all three corners of the trilemma. It is built as a **self-scaling, agentic, multi-LLM ecosystem** on top of a **memory-safe Rust attack surface**.
 
-Here's how each corner is solved:
+So what are we planning to do different to solve the existing pain points?
 
-| Trilemma Corner | Māyājāl's Solution |
-|---|---|
-| **High-Fidelity Realism** | A fine-tuned code model (via QLoRA + CorDA continued pre-training) on real and synthetic Ubuntu terminal sessions — survives `vim`, `tmux`, `gdb`, `strace`, and complex priv-esc chains |
-| **Sustained Engagement** | An agentic LLM (Persona Factory) autonomously synthesizes entire corporate workforces — hundreds of employees with complete digital lives |
-| **Operational Scalability** | The same agent deploys Dockerized honeypot containers on demand, binding them to new IPs with zero human intervention |
+I would like to give you a high level overview before diving deep into the architecture, let's say you are using our solution as a defender, what would you do or what tools you will have in your arsenal?
 
-And critically, a **second agent** (the TTP Analyst) continuously transforms raw honeypot sessions into structured MITRE ATT&CK timelines, YARA rules, Sigma rules, and incident reports — closing the loop from keystroke to detection in seconds.
+When the defender will deploy the honeypot for the first time, he/she will be asked for **Persona Generation**, now what do I mean by *Persona Generation*? The honeypot will generate a fake FileSystem(FS) for entire company!! YESS!!! you heard it right, it will generate personas for entire company!! Now what you as a defender have to do is just specify the number of departments, the names of departments and the number of employees each department will have. 
+
+So this part of the architecture, I like to call it the Persona Factory, now after generation of these personas, 
 
 ---
 
