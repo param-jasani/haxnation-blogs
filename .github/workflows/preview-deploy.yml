@@ -116,7 +116,7 @@ jobs:
           # Safe: ref is pinned to trusted `main`, never PR code.
 
       # ── 3. Authorization gate: only listed writers get a hosted preview ─────
-      - name: 🔑 Authorization gate (fail-safe: no preview for strangers)
+      - name: '🔑 Authorization gate (fail-safe: no preview for strangers)'
         id: gate
         if: steps.pr.outputs.skip != 'true'
         env:
