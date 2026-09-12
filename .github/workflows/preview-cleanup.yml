@@ -35,6 +35,13 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: 📥 Checkout (required — provides the git repo; PR code never used)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # persist-credentials default true — needed to push to gh-pages.
+          # Safe: we never build or execute PR code in this workflow.
+
       - name: 🧹 Delete preview folder
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}

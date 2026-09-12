@@ -23,6 +23,9 @@ const config = {
   projectName: 'blog',     // Repo name
   trailingSlash: false,
 
+  // Client modules (vanilla JS, no React): collapsible Recent Posts sidebar
+  clientModules: ['./src/js/blogSidebarToggle.js'],
+
   onBrokenLinks: 'throw',
 
   // Docusaurus 3.10+ — moved from top-level onBrokenMarkdownLinks
