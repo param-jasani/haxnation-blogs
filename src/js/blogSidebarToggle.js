@@ -76,10 +76,19 @@ function attachToggle() {
   applyCollapsed(container, storedPreference());
 }
 
-export default (function init() {
-  if (typeof window === 'undefined') return;
+// NOTE: client modules execute top-level code on import — Docusaurus does
+// NOT call the default export. So run immediately here (previously this was
+// `export default (function init() {...})` which defined but never ran,
+// leaving no toggle button in the sidebar).
+if (typeof window !== 'undefined') {
   attachToggle();
   // Re-attach after SPA route changes (sidebar is re-rendered per post).
   const observer = new MutationObserver(() => attachToggle());
   observer.observe(document.documentElement, { childList: true, subtree: true });
-});
+}
+
+// Docusaurus client lifecycle: re-attach on every route change (reliable
+// even if the observer misses a render).
+export function onRouteDidUpdate() {
+  attachToggle();
+}
