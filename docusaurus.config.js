@@ -14,8 +14,10 @@ const config = {
   // ── GitHub Pages deployment ──────────────────────────────────────
   // Trial: haxnation.github.io/blog
   // Production: change to 'https://blog.Haxnation.org' and baseUrl: '/'
+  // PR previews override baseUrl via PREVIEW_BASE_URL, e.g. '/blog/pr-123/'
+  // (see .github/workflows/preview-*.yml). Never commit a PR-specific value.
   url: 'https://haxnation.github.io',
-  baseUrl: '/blog/',
+  baseUrl: process.env.PREVIEW_BASE_URL || '/blog/',
 
   organizationName: 'haxnation',  // GitHub org/user owning the repo
   projectName: 'blog',     // Repo name

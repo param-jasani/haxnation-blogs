@@ -1,0 +1,77 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# preview-build.yml — PR Preview STAGE 1/2: Build (UNTRUSTED)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# SECURITY MODEL — read this before changing `on:` or `permissions:`:
+#   - This workflow runs on `pull_request` (not `pull_request_target`).
+#   - It checks out and BUILDS fork code, which is ARBITRARY UNTRUSTED CODE.
+#   - Therefore it must have NO write permissions and NO secrets:
+#       permissions: contents: read   (only)
+#   - It NEVER pushes, comments, or deploys. It only uploads a static
+#     build artifact. The privileged STAGE 2 (preview-deploy.yml, triggered
+#     via `workflow_run` in the trusted base context) decides whether to
+#     publish that artifact to gh-pages/pr-<N>/.
+#   - Do NOT add secrets, write permissions, or deploys to this file.
+#
+# WHAT IT DOES:
+#   1. Builds the PR with PREVIEW_BASE_URL=/blog/pr-<N>/
+#      (docusaurus.config.js reads this env var).
+#   2. Uploads ./build as artifact `preview-pr-<N>` (7-day retention).
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: PR Preview — Build (untrusted)
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened ]
+
+# MINIMAL permissions: read-only. No secrets are available to fork code.
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build PR preview artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PREVIEW_BASE_URL: /blog/pr-${{ github.event.pull_request.number }}/
+
+    steps:
+      - name: 📥 Checkout PR code (untrusted, no credentials persisted)
+        uses: actions/checkout@v4
+        with:
+          # Default for `pull_request` is the merge commit — what would merge.
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🏗️ Build preview (baseUrl=/blog/pr-<N>/)
+        run: npm run build
+        env:
+          CI: true
+          PREVIEW_BASE_URL: ${{ env.PREVIEW_BASE_URL }}
+
+      - name: 🗜️ Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-pr-${{ env.PR_NUMBER }}
+          path: ./build
+          retention-days: 7
+          if-no-files-found: error

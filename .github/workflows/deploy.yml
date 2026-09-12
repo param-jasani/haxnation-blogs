@@ -1,17 +1,30 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# deploy.yml — Haxnation Blog: Build & Deploy to GitHub Pages
+# deploy.yml — Haxnation Blog: Build & Deploy PRODUCTION to gh-pages root
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # PURPOSE:
-#   Triggered ONLY on pushes to `main` (which happen exclusively via merged PRs
-#   due to branch protection rules). Builds the Docusaurus site and deploys the
-#   static output to GitHub Pages.
+#   Triggered ONLY on pushes to `main` (exclusively via merged PRs due to
+#   branch protection). Builds Docusaurus with baseUrl=/blog/ and pushes the
+#   static output to the ROOT of the `gh-pages` branch.
 #
-# PREREQUISITES (one-time setup):
-#   1. Go to repo Settings → Pages
-#      - Source: "GitHub Actions" (not "Deploy from a branch")
-#   2. Ensure the repository has Pages enabled.
-#   3. No additional secrets required — uses GITHUB_TOKEN with Pages permissions.
+# WHY BRANCH-BASED (not actions/deploy-pages):
+#   PR previews live in the SAME Pages site under gh-pages/pr-<N>/ and are
+#   served at https://<owner>.github.io/blog/pr-<N>/. GitHub Pages can only
+#   serve ONE source, so prod and previews must share the `gh-pages` branch:
+#     gh-pages/
+#       ├── index.html, assets/...   ← PROD (this workflow, root only)
+#       ├── pr-12/, pr-13/, ...      ← PREVIEWS (preview-deploy.yml, untouched here)
+#       └── .nojekyll
+#   This workflow therefore syncs the root with `rsync --delete` EXCLUDING
+#   `pr-*` folders, so a prod deploy NEVER wipes active previews.
+#
+# ONE-TIME SETUP (owner/admin — required or previews 404):
+#   1. Repo Settings → Pages → Source: "Deploy from a branch"
+#      Branch: gh-pages / folder: / (root)
+#   2. Repo Settings → Actions → General → Workflow permissions:
+#      "Read repository contents and packages permissions" is enough —
+#      per-job `contents: write` below escalates only where needed.
+#   3. First run of this workflow creates the `gh-pages` branch automatically.
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -20,32 +33,26 @@ name: 🚀 Deploy to GitHub Pages
 on:
   push:
     branches: [ main ]
-  # Allow manual trigger from the Actions tab (useful for first deploy)
   workflow_dispatch:
 
-# Strict, minimal permissions
 permissions:
-  contents: read
-  pages:    write       # Required to deploy to GitHub Pages
-  id-token: write       # Required for OIDC token (trusted Pages deployment)
+  contents: write   # push prod files to gh-pages (PR previews use their own jobs)
 
-# Allow only one concurrent deployment; don't cancel in-progress runs
 concurrency:
   group: pages-deploy
   cancel-in-progress: false
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  build:
-    name: Build Docusaurus Site
+  build-deploy:
+    name: Build & push prod to gh-pages root
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      - name: 📥 Checkout repository
+      - name: 📥 Checkout main
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for accurate git log dates in posts
+          fetch-depth: 0  # full history for git log dates in posts
 
       - name: ⚙️ Setup Node.js
         uses: actions/setup-node@v4
@@ -56,39 +63,53 @@ jobs:
       - name: 📦 Install dependencies
         run: npm ci
 
-      - name: 🏗️ Build Docusaurus site
+      - name: 🏗️ Build Docusaurus site (prod baseUrl=/blog/)
         run: npm run build
         env:
-          # Treat broken links as errors in CI
           CI: true
-          # Uncomment to suppress warnings if needed during initial setup:
-          # NODE_OPTIONS: --max-old-space-size=4096
+          # PREVIEW_BASE_URL intentionally UNSET → config falls back to '/blog/'
 
-      - name: 🗜️ Upload build artifact for Pages
-        uses: actions/upload-pages-artifact@v3
-        with:
-          # Docusaurus outputs to ./build by default
-          path: ./build
+      - name: 🚀 Push prod to gh-pages root (preserve pr-*/ previews)
+        run: |
+          set -euo pipefail
+          # Stash prod build outside the worktree before switching branches
+          rm -rf /tmp/prod-build
+          mv build /tmp/prod-build
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  deploy:
-    name: Deploy to GitHub Pages
-    runs-on: ubuntu-latest
-    needs: build
-    timeout-minutes: 10
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+          git fetch origin gh-pages 2>/dev/null || echo "(no gh-pages branch yet — will create)"
+          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            git checkout gh-pages
+            git pull --ff-only origin gh-pages || true
+          else
+            git checkout --orphan gh-pages
+            git rm -rf . 2>/dev/null || true
+            echo "# GitHub Pages (prod at root, PR previews under pr-<N>/)" > README.md
+            git add README.md
+            git commit -m "chore: init gh-pages branch"
+            git push -u origin gh-pages
+          fi
 
-    steps:
-      - name: 🌐 Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          # Sync prod files to root, DELETING stale prod files but KEEPING previews
+          # (--exclude protects pr-*/ from --delete; .git is never touched by rsync)
+          rsync -a --delete --exclude 'pr-*/' --exclude '.git/' /tmp/prod-build/ ./
+          touch .nojekyll
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No production changes to deploy."
+          else
+            git commit -m "deploy: production from main@${GITHUB_SHA:0:7}"
+            git push origin gh-pages
+            echo "✅ Production deployed to gh-pages root (previews preserved)."
+          fi
 
       - name: ✅ Deployment complete
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  ✅  Haxnation Blog deployed!"
-          echo "  🌐  URL: ${{ steps.deployment.outputs.page_url }}"
+          echo "  🌐  Prod: https://${{ github.repository_owner }}.github.io/blog/"
+          echo "  👀  Previews preserved under gh-pages/pr-*/"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

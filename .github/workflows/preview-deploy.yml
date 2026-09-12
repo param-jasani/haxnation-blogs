@@ -1,0 +1,224 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# preview-deploy.yml — PR Preview STAGE 2/2: Deploy (TRUSTED)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# SECURITY MODEL:
+#   - Triggered via `workflow_run` by completion of STAGE 1. This workflow
+#     itself runs TRUSTED code from `main` — it NEVER checks out PR code.
+#   - It downloads the static artifact built in STAGE 1 and pushes ONLY the
+#     `pr-<N>/` subfolder of the `gh-pages` branch. Production files at the
+#     branch root are never touched here.
+#   - Author authorization is re-checked here against blog-writers.txt from
+#     `main` (not from the PR). Unauthorized authors get no preview deployment
+#     (fail-safe against spam / mining abuse).
+#   - PR number is strictly validated as digits to prevent path traversal.
+#
+# REQUIRES (one-time, see deploy.yml header):
+#   - Pages Source: "Deploy from a branch" → gh-pages / root
+#   - Actions → General → Workflow permissions: Read repository contents
+#     (per-job `contents: write` below escalates only this workflow).
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: PR Preview — Deploy (trusted)
+
+on:
+  workflow_run:
+    workflows: [ 'PR Preview — Build (untrusted)' ]
+    types: [ completed ]
+
+permissions:
+  contents: write        # push pr-<N>/ folder to gh-pages
+  pull-requests: write   # comment preview URL on the PR
+  actions: read          # download artifact from STAGE 1 run
+
+concurrency:
+  group: preview-deploy-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publish preview to gh-pages/pr-<N>/
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only deploy successful builds that came from a pull_request event
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+
+    steps:
+      # ── 1. Resolve PR number / author / head SHA (trusted API calls only) ──
+      - name: 🔍 Resolve PR context
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            let prs = run.pull_requests || [];
+            let prNumber = prs.length > 0 ? prs[0].number : null;
+            let headSha = run.head_sha;
+            // Fallback: find PR by head SHA (fork PRs sometimes omit the array)
+            if (!prNumber) {
+              core.info(`No pull_requests in payload, searching by head SHA ${headSha}`);
+              const { data } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 100,
+              });
+              const match = data.find(p => p.head.sha === headSha);
+              if (!match) {
+                core.setFailed(`Could not resolve PR for head SHA ${headSha}. Skipping.`);
+                return;
+              }
+              prNumber = match.number;
+            }
+            if (!/^[0-9]+$/.test(String(prNumber))) {
+              core.setFailed(`Refusing to deploy: PR number failed digit validation: ${prNumber}`);
+              return;
+            }
+            // Fetch canonical PR metadata (author) from base context
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            core.info(`PR #${prNumber} by @${pr.user.login} state=${pr.state}`);
+            if (pr.state === 'closed') {
+              core.info('PR is already closed — skipping deploy (cleanup will handle it).');
+              core.setOutput('skip', 'true');
+              return;
+            }
+            core.setOutput('number', String(prNumber));
+            core.setOutput('author', pr.user.login);
+            core.setOutput('skip', 'false');
+
+      # ── 2. Checkout TRUSTED base (main) — never the PR — for allow-list ─────
+      - name: 📥 Checkout base (trusted, for writers allow-list)
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          sparse-checkout: |
+            blog-writers.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+
+      # ── 3. Authorization gate: only listed writers get a hosted preview ─────
+      - name: 🔑 Authorization gate (fail-safe: no preview for strangers)
+        id: gate
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          PR_AUTHOR: ${{ steps.pr.outputs.author }}
+        run: |
+          AUTHOR_LOWER=$(echo "${PR_AUTHOR}" | tr '[:upper:]' '[:lower:]')
+          ALLOWED=$(grep -vE '^\s*#' blog-writers.txt | tr '[:upper:]' '[:lower:]' | tr -d ' \r\t' | grep -v '^$' || true)
+          if echo "${ALLOWED}" | grep -qw "${AUTHOR_LOWER}"; then
+            echo "✅ @${PR_AUTHOR} authorized — proceeding to deploy preview."
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::@${PR_AUTHOR} not in blog-writers.txt — skipping preview deployment."
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 4. Download the UNTRUSTED build artifact (treated as opaque files) ──
+      - name: 📥 Download preview artifact from STAGE 1
+        if: steps.pr.outputs.skip != 'true' && steps.gate.outputs.allowed == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: preview-pr-${{ steps.pr.outputs.number }}
+          path: ./preview-build
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 5. Publish ONLY pr-<N>/ to gh-pages (production root untouched) ─────
+      - name: 🚀 Publish to gh-pages/pr-<N>/
+        if: steps.pr.outputs.skip != 'true' && steps.gate.outputs.allowed == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Strict digit validation (defense in depth against path traversal)
+          if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid PR number: ${PR_NUMBER}"
+            exit 1
+          fi
+          PREVIEW_DIR="pr-${PR_NUMBER}"
+          echo "Preview dir: ${PREVIEW_DIR}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin gh-pages 2>/dev/null || echo "(no gh-pages branch yet — will create)"
+          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            git checkout gh-pages
+            git pull --ff-only origin gh-pages || true
+          else
+            git checkout --orphan gh-pages
+            git rm -rf . 2>/dev/null || true
+            echo "# GitHub Pages (prod at root, PR previews under pr-<N>/)" > README.md
+            git add README.md
+            git commit -m "chore: init gh-pages branch"
+            git push -u origin gh-pages
+          fi
+
+          # Replace ONLY this PR's folder; everything else (prod + other PRs) stays
+          rm -rf "${PREVIEW_DIR}"
+          mkdir -p "${PREVIEW_DIR}"
+          cp -a preview-build/. "${PREVIEW_DIR}/"
+          touch .nojekyll
+          touch "${PREVIEW_DIR}/.nojekyll"
+
+          git add "${PREVIEW_DIR}" .nojekyll
+          if git diff --cached --quiet; then
+            echo "No changes to deploy."
+          else
+            git commit -m "preview: update ${PREVIEW_DIR} (PR #${PR_NUMBER}, run ${{ github.event.workflow_run.id }})"
+            git push origin gh-pages
+            echo "✅ Pushed ${PREVIEW_DIR}/ to gh-pages."
+          fi
+
+      # ── 6. Comment (create/update) the preview URL on the PR ────────────────
+      - name: 💬 Comment preview URL
+        if: always() && steps.pr.outputs.number != ''
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          ALLOWED: ${{ steps.gate.outputs.allowed }}
+          SKIPPED: ${{ steps.pr.outputs.skip }}
+        with:
+          script: |
+            const prNumber = process.env.PR_NUMBER;
+            if (!prNumber || !/^[0-9]+$/.test(prNumber)) return;
+            const skipped = process.env.SKIPPED === 'true';
+            if (skipped) return;
+            const allowed = process.env.ALLOWED === 'true';
+            const deployFailed = '${{ job.status }}' !== 'success';
+            let body;
+            if (!allowed) {
+              body = `## 👀 Blog Preview — not published\n\n` +
+                `> @${context.payload.workflow_run?.head_repository?.owner?.login || 'author'} is not in \`blog-writers.txt\`, so no preview was deployed (spam protection).\n\n` +
+                `An admin can add them to publish previews on future pushes.\n\n---\n_🤖 Preview bot · STAGE 2/2_`;
+            } else if (deployFailed) {
+              body = `## ⚠️ Blog Preview — build/deploy failed\n\nCheck the [failed run](${context.payload.workflow_run.html_url}) for logs (broken links, images, or MDX errors).\n\n---\n_🤖 Preview bot · STAGE 2/2_`;
+            } else {
+              const url = `https://${context.repo.owner}.github.io/blog/pr-${prNumber}/`;
+              body = `## 👀 Blog Preview — ready!\n\n| | |\n|---|---|\n| 🔗 **Preview** | [${url}](${url}) |\n| 📂 Scope | \`gh-pages\` → \`pr-${prNumber}/\` (auto-deleted on close) |\n\n` +
+                `> Push again to refresh. Check your post, images, dark/light mode, and mobile width.\n\n---\n_🤖 Preview bot · STAGE 2/2 · run ${context.payload.workflow_run.id}_`;
+            }
+            const marker = '<!-- haxnation-preview-bot -->';
+            body += `\n${marker}`;
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: Number(prNumber),
+            });
+            const existing = comments.data.find(c => c.user.type === 'Bot' && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: Number(prNumber), body,
+              });
+            }
