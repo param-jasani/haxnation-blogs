@@ -1374,6 +1374,18 @@ time,
   padding-top: 0.25rem !important;
 }
 
+/* Collapsed state (desktop only): let the article column grow into the
+   freed space. The TOC keeps its fixed `col--2`, so it stays pinned right.
+   Stock layout is rail(44px) + main(col--7, fixed) + toc(col--2); without
+   this rule the row just shifts left and leaves a hole on the right. */
+@media (min-width: 997px) {
+  body.hax-blog-sidebar-collapsed-page main.col--7 {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+}
+
 /* Swizzled sidebar list (plain classes from BlogSidebar/Desktop override) */
 .hax-blog-sidebar-list {
   list-style: none !important;

@@ -17,7 +17,7 @@
  *  - State persists in localStorage (`hax-blog-sidebar-collapsed`).
  *  - The mobile variant is untouched (theme default dropdown).
  */
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import clsx from 'clsx';
 import {translate} from '@docusaurus/Translate';
 import {
@@ -57,6 +57,19 @@ function readStoredCollapsed() {
 export default function BlogSidebarDesktop({sidebar}) {
   const items = useVisibleBlogSidebarItems(sidebar.items);
   const [isCollapsed, setIsCollapsed] = useState(readStoredCollapsed);
+
+  // Mirror the state onto <body> so CSS can let the article column grow
+  // into the freed space while the TOC column stays pinned right.
+  // (Effect = client-only, so no SSR/hydration mismatch on the class.)
+  useEffect(() => {
+    document.body.classList.toggle(
+      'hax-blog-sidebar-collapsed-page',
+      isCollapsed,
+    );
+    return () => {
+      document.body.classList.remove('hax-blog-sidebar-collapsed-page');
+    };
+  }, [isCollapsed]);
 
   function toggleCollapsed() {
     setIsCollapsed((prev) => {
