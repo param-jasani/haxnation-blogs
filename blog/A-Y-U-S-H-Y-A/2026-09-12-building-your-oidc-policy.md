@@ -9,6 +9,8 @@ description: A section-by-section, question-led walkthrough for building your or
 
 Most companies don't have an OIDC problem because nobody understands OpenID Connect. They have one because nobody ever wrote down the *decisions*: which provider, which apps, who owns the credentials, how long a secret should live, what happens when someone forgets to rotate one. The protocol is standardized. Your organization's choices around it are not, until you write them down.
 
+<!-- truncate -->
+
 This guide is built to be answered, not just read. Every section below explains *why* that piece of a policy matters, then hands you a short list of questions. Open a blank Word document next to this post, work through the sections in order, and by the end you'll have a first draft of a real OIDC policy, not a template with the blanks still in it.
 
 ## How to use this guide
